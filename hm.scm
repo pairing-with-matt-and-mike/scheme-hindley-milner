@@ -9,7 +9,6 @@
 (define fn-type? list?)
 (define free-type? number?)
 
-
 (define (append-propogate-failure first second)
   (if (and first second) (append first second) #f))
 
@@ -69,30 +68,49 @@
 
 (assert-equal #f (unify-types 'Number '(Number Number)))
 
-(define (infer-type* env free-type-counter node)
-  (cond ((number? node) 'Number)
-        ((string? node) 'String)
-        ((variable? node) (cadr (assoc node env)))
+(define (unify-types* type-mapping first-type second-type)
+  (append-propogate-failure (unify-types first-type second-type) type-mapping))
+
+(define (infer-type* type-mapping env free-type-counter node)
+  (cond ((number? node) `(,type-mapping Number))
+        ((string? node) `(,type-mapping String))
+        ((variable? node) `(,type-mapping ,(cadr (assoc node env))))
         ((fn? node)
          (let* ((formal-arg-name (cadr node))
-                (body-env (cons `(,formal-arg-name ,free-type-counter) env)))
-           `(,free-type-counter
-             ,(infer-type* body-env (+ 1 free-type-counter) (caddr node)))))
+                (body-env (cons `(,formal-arg-name ,free-type-counter) env))
+                (inference (infer-type* type-mapping
+                                        body-env
+                                        (+ 1 free-type-counter)
+                                        (caddr node))))
+           `(,(car inference) (,free-type-counter ,(cadr inference)))))
         ((apply? node)
-         (let* ((callee-type* (infer-type* env free-type-counter (cadr node)))
+         (let* ((inference (infer-type* type-mapping
+                                        env
+                                        free-type-counter
+                                        (cadr node)))
+                (callee-type* (cadr inference))
                 (abstract-callee-type `(,free-type-counter ,(+ 1 free-type-counter)))
-                (callee-type-mapping (unify-types callee-type* abstract-callee-type))
+                (callee-type-mapping (unify-types* (car inference)
+                                                   callee-type*
+                                                   abstract-callee-type))
                 (callee-type (resolve-types callee-type-mapping callee-type*)))
            (if (fn-type? callee-type)
                (let* ((formal-arg-type (car callee-type))
-                      (actual-arg-type (infer-type* env (+ 2 free-type-counter) (caddr node)))
-                      (arg-type-mapping (unify-types formal-arg-type actual-arg-type))
-                      (type-mapping (append callee-type-mapping arg-type-mapping))
+                      (inference* (infer-type* callee-type-mapping
+                                               env
+                                               (+ 2 free-type-counter)
+                                               (caddr node)))
+                      (actual-arg-type (cadr inference*))
+                      (arg-type-mapping (unify-types* (car inference*)
+                                                      formal-arg-type
+                                                      actual-arg-type))
                       (return-type (cadr callee-type)))
-                 (resolve-types type-mapping return-type))
-               #f)))))
+                 `(,arg-type-mapping ,(resolve-types arg-type-mapping return-type)))
+               `(,type-mapping #f))))))
 
-(define (infer-type node) (infer-type* '() 0 node))
+(define (infer-type node)
+  (let ((inference (infer-type* '() '() 0 node)))
+    (resolve-types (car inference) (cadr inference))))
 
 (assert-equal 'Number          (infer-type 1))
 
@@ -110,7 +128,7 @@
 
 (assert-equal 'Number          (infer-type '(apply (fn x x) 1)))
 
-(assert-equal '((Number 0) 0)  (infer-type '(fn f (apply f 1))))
+(assert-equal '((Number 2) 2)  (infer-type '(fn f (apply f 1))))
 
 (assert-equal 'Number          (infer-type
                                 '(apply
